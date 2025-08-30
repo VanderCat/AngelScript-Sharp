@@ -1,0 +1,23 @@
+namespace AngelScript.Interop;
+
+[NativeTypeName("unsigned int")]
+public enum asEBehaviours : uint
+{
+    asBEHAVE_CONSTRUCT,
+    asBEHAVE_LIST_CONSTRUCT,
+    asBEHAVE_DESTRUCT,
+    asBEHAVE_FACTORY,
+    asBEHAVE_LIST_FACTORY,
+    asBEHAVE_ADDREF,
+    asBEHAVE_RELEASE,
+    asBEHAVE_GET_WEAKREF_FLAG,
+    asBEHAVE_TEMPLATE_CALLBACK,
+    asBEHAVE_FIRST_GC,
+    asBEHAVE_GETREFCOUNT = asBEHAVE_FIRST_GC,
+    asBEHAVE_SETGCFLAG,
+    asBEHAVE_GETGCFLAG,
+    asBEHAVE_ENUMREFS,
+    asBEHAVE_RELEASEREFS,
+    asBEHAVE_LAST_GC = asBEHAVE_RELEASEREFS,
+    asBEHAVE_MAX,
+}

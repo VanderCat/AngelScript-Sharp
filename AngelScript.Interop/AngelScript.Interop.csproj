@@ -1,0 +1,40 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net9.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(Platform)' == 'x64'">
+        <DefineConstants>X64</DefineConstants>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\AngelScript.CAPI\AngelScript.CAPI.cxxproj" ReferenceOutputAssembly="false"/>
+    </ItemGroup>
+    
+    <Target Name="_AddNativeLibraries"
+            BeforeTargets="AssignTargetPaths; _GetPackageFiles">
+        <MSBuild Projects="..\AngelScript.CAPI\AngelScript.CAPI.cxxproj"
+                 Targets="_GetNativeLibraries">
+            <Output TaskParameter="TargetOutputs"
+                    ItemName="_NativeLibrary" />
+        </MSBuild>
+
+        <ItemGroup>
+            <Content Include="@(_NativeLibrary)"
+                     Link="runtimes/%(RuntimeIdentifier)/native/%(Filename)%(Extension)"
+                     CopyToOutputDirectory="PreserveNewest"
+                     PackagePath="runtimes/%(RuntimeIdentifier)/native" />
+            <_NativeLibrarySymbols Include="@(_NativeLibrary->'%(Symbols)')" />
+            <Content Include="@(_NativeLibrarySymbols)"
+                     Link="runtimes/%(RuntimeIdentifier)/native/%(Filename)%(Extension)"
+                     CopyToOutputDirectory="PreserveNewest"
+                     PackagePath="runtimes/%(RuntimeIdentifier)/native" />
+        </ItemGroup>
+    </Target>
+    
+</Project>

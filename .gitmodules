@@ -1,0 +1,3 @@
+[submodule "AngelScript.Native"]
+	path = AngelScript.Native
+	url = https://github.com/anjo76/angelscript
