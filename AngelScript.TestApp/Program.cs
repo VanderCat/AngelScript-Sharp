@@ -121,6 +121,7 @@ internal unsafe class Program {
     }
     
     private static void FloatPrinter(float meow) {
+        //throw new Exception("Test error");
         Console.WriteLine($"The application requested to print {meow}");
     }
     
@@ -183,7 +184,7 @@ internal unsafe class Program {
         var mod = engine.GetModule();
         if (mod is null)
             throw new Exception("the module is null");
-        var func = mod.GetFunctionByDecl("float calc(float,float)");
+        using var func = mod.GetFunctionByDecl("float calc(float,float)");
         if (func is null)
             throw new Exception("function haven't been found");
         
@@ -215,7 +216,7 @@ internal unsafe class Program {
                 Console.WriteLine("The script ended with an exception.");
 
                 // Write some information about the script exception
-                var func1 = ctx.GetExceptionFunction();
+                using var func1 = ctx.GetExceptionFunction();
                 if (func1 is null)
                     return;
                 sbyte* scriptSectionPtr = null;
@@ -239,9 +240,9 @@ internal unsafe class Program {
             Console.WriteLine(returnValue);
         }
         // We must release the contexts when no longer using them
-        ctx.Release();
+        ctx.Dispose();
 
         // Shut down the engine
-        engine.ShutDownAndRelease();
+        engine.ShutDownAndDispose();
     }
 }

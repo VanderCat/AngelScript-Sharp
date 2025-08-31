@@ -19,7 +19,7 @@ namespace AngelScript;
 /// if the application needs to expose different interfaces to different types of scripts this can usually
 /// be accomplished through the use of configuration groups and access profiles.
 /// </remarks>
-public unsafe class ScriptEngine {
+public unsafe class ScriptEngine : IDisposable {
 	public asScriptEngine* Handle;
 	public static implicit operator asScriptEngine*(ScriptEngine e) => e.Handle;
 
@@ -60,7 +60,7 @@ public unsafe class ScriptEngine {
 	///	Call this method when storing an additional reference to the object. Remember that
 	/// the first reference that is received from asCreateScriptEngine is already accounted for.
 	/// </remarks>
-	public int AddRef() => ScriptEngine_AddRef(this);
+	internal int AddRef() => ScriptEngine_AddRef(this);
 	
 	/// <summary>
 	/// Decrease reference counter
@@ -71,8 +71,8 @@ public unsafe class ScriptEngine {
 	/// <br/><br/>
 	/// If you know that the engine is supposed to be shut down, then it is recommended to call the <see cref="ShutDownAndRelease"/> method instead. 
 	/// </remarks>
-	public int Release() => ScriptEngine_Release(this);
-	
+	internal int Release() => ScriptEngine_Release(this);
+
 	/// <summary>
 	/// Shuts down the engine then decrease the reference counter
 	/// </summary>
@@ -84,7 +84,20 @@ public unsafe class ScriptEngine {
 	/// Calling this method rather than the ordinary Release method will avoid potential memory leaks if for example there
 	/// are objects in the modules or garbage collector that indirectly holds a reference to the engine. 
 	/// </remarks>
-	public int ShutDownAndRelease() => ScriptEngine_ShutDownAndRelease(this);
+	public int ShutDownAndDispose() {
+		Dispose(true);
+		return ScriptEngine_ShutDownAndRelease(this);
+	}
+
+	public void Dispose() {
+		Dispose(false);
+	}
+
+	private void Dispose(bool shutdown) {
+		GC.SuppressFinalize(this);
+		if (shutdown) return;
+		Release();
+	}
 		
 	#endregion
 

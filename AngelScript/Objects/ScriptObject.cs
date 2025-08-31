@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace AngelScript;
 
-public unsafe class ScriptObject {
+public unsafe class ScriptObject : IDisposable {
     public asScriptObject* Handle;
     public static implicit operator asScriptObject*(ScriptObject c) => c.Handle;
 
@@ -29,8 +29,24 @@ public unsafe class ScriptObject {
     }
     
     #region Memory management
-    public int AddRef() => ScriptObject_AddRef(this);
-    public int Release() => ScriptObject_Release(this);
+    /// <summary>
+    /// Increases the reference counter
+    /// </summary>
+    /// <returns>The number of references to this object</returns>
+    /// <remarks>Call this method when storing an additional reference to the object</remarks>
+    internal int AddRef() => ScriptObject_AddRef(this);
+    
+    /// <summary>
+    /// Decrease reference counter
+    /// </summary>
+    /// <returns>The number of references to this object</returns>
+    /// <remarks>Call this method when you will no longer use the references that you own</remarks>
+    internal int Release() => ScriptObject_Release(this);
+
+    public void Dispose() {
+        GC.SuppressFinalize(this);
+        Release();
+    }
     public asLockableSharedBool* GetWeakRefFlag() => ScriptObject_GetWeakRefFlag(this);
     #endregion
     #region Type info

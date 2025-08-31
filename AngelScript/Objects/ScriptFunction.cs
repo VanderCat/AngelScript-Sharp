@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace AngelScript;
 
-public unsafe class ScriptFunction {
+public unsafe class ScriptFunction : IDisposable {
 	public asScriptFunction* Handle;
 	public static implicit operator asScriptFunction*(ScriptFunction c) => c.Handle;
 
@@ -32,8 +32,23 @@ public unsafe class ScriptFunction {
 	public ScriptEngine Engine => ScriptEngine.FromPtr(ScriptFunction_GetEngine(this));
 
 	#region Memory management
-	public int AddRef() => ScriptFunction_AddRef(this);
-	public int Release() => ScriptFunction_Release(this);
+	/// <summary>
+	/// Increases the reference counter
+	/// </summary>
+	/// <returns>The number of references to this object</returns>
+	/// <remarks>Call this method when storing an additional reference to the object</remarks>
+	internal int AddRef() => ScriptFunction_AddRef(this);
+	/// <summary>
+	/// Decrease reference counter
+	/// </summary>
+	/// <returns>The number of references to this object</returns>
+	/// <remarks>Call this method when you will no longer use the references that you own</remarks>
+	internal int Release() => ScriptFunction_Release(this);
+
+	public void Dispose() {
+		GC.SuppressFinalize(this);
+		Release();
+	}
 	#endregion
 	#region Miscellaneous
 	public int Id => ScriptFunction_GetId(this);

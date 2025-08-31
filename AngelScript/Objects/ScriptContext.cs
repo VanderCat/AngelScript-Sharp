@@ -4,7 +4,7 @@ using System.Text;
 
 namespace AngelScript;
 
-public unsafe class ScriptContext {
+public unsafe class ScriptContext : IDisposable {
     public asScriptContext* Handle;
     public static implicit operator asScriptContext*(ScriptContext c) => c.Handle;
 
@@ -31,8 +31,25 @@ public unsafe class ScriptContext {
     }
     
     #region Memory management
-    public int AddRef() => ScriptContext_AddRef(this);
-    public int Release() => ScriptContext_Release(this);
+    /// <summary>
+    /// Increase reference counter
+    /// </summary>
+    /// <returns>The number of references to this object</returns>
+    /// <remarks>
+    ///	Call this method when storing an additional reference to the object.
+    /// Remember that the first reference that is received from <see cref="ScriptEngine.CreateContext"/> is already accounted for. 
+    /// </remarks>
+    internal int AddRef() => ScriptContext_AddRef(this);
+    /// <summary>
+    /// Decrease reference counter
+    /// </summary>
+    /// <returns>Call this method when you will no longer use the references that you own</returns>
+    internal int Release() => ScriptContext_Release(this);
+
+    public void Dispose() {
+	    Release();
+	    GC.SuppressFinalize(this);
+    }
     #endregion
 
 	#region Miscellaneous

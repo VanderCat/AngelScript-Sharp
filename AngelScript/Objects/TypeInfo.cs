@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace AngelScript;
 
-public unsafe class TypeInfo {
+public unsafe class TypeInfo : IDisposable {
 	public asTypeInfo* Handle;
 	public static implicit operator asTypeInfo*(TypeInfo c) => c.Handle;
 
@@ -35,8 +35,31 @@ public unsafe class TypeInfo {
     public asScriptModule* GetModule() => TypeInfo_GetModule(this);
     #endregion
 	#region Memory management
-	public int AddRef() => TypeInfo_AddRef(this);
-	public int Release() => TypeInfo_Release(this);
+	/// <summary>
+	/// Increases the reference counter
+	/// </summary>
+	/// <returns>The number of references to this object</returns>
+	/// <remarks>Call this method when storing an additional reference to the object</remarks>
+	internal int AddRef() => TypeInfo_AddRef(this);
+	
+	/// <summary>
+	/// Decrease reference counter
+	/// </summary>
+	/// <returns>The number of references to this object</returns>
+	/// <remarks>Call this method when you will no longer use the references that you own</remarks>
+	internal int Release() => TypeInfo_Release(this);
+
+	internal int ReferenceCount {
+		get {
+			var num = AddRef();
+			var num2 = Release();
+			return num2;
+		}
+	}
+
+	public void Dispose() {
+		Release();
+	}
 	#endregion
 	#region Type info
 	public byte* GetName() => (byte*)TypeInfo_GetName(this);
