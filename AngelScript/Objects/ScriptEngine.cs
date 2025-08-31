@@ -28,21 +28,27 @@ public unsafe class ScriptEngine {
 	}
 
 	public static ScriptEngine FromPtr(asScriptEngine* engine, bool useUserdata = true, bool createUserdata = false) {
-		if (!useUserdata) {
-			var scriptEngine = new ScriptEngine(engine);
+		if (!useUserdata)
+			return new ScriptEngine(engine);
+		var userData = ScriptEngine_GetUserData(engine, 2000);
+		if (userData is null) {
 			if (!createUserdata)
-				return scriptEngine;
+				throw new NullReferenceException("Provided pointer have not been instantiated in managed realm");
+			var scriptEngine = new ScriptEngine(engine);
 			var handle = GCHandle.Alloc(scriptEngine, GCHandleType.Normal);
-			scriptEngine.SetUserData((void*)GCHandle.ToIntPtr(handle), 2000);
+			ScriptEngine_SetUserData(engine, (void*)GCHandle.ToIntPtr(handle), 2000);
+			scriptEngine.SetEngineUserDataPtrCleanupCallback(&OnEngineUserDataCleanup, 2000);
+			scriptEngine.SetModuleUserDataPtrCleanupCallback(&OnModuleUserDataCleanup, 2000);
+			scriptEngine.SetContextUserDataPtrCleanupCallback(&OnContextUserDataCleanup, 2000);
+			scriptEngine.SetFunctionUserDataPtrCleanupCallback(&OnFunctionUserDataCleanup, 2000);
+			scriptEngine.SetTypeInfoUserDataPtrCleanupCallback(&OnTypeInfoUserDataCleanup, 2000);
+			scriptEngine.SetScriptObjectUserDataPtrCleanupCallback(&OnObjectUserDataCleanup, 2000);
 			return scriptEngine;
 		}
-		var userData = ScriptEngine_GetUserData(engine, 2000);
-		if (userData is null)
-			throw new NullReferenceException("Provided pointer have not been instantiated in managed realm");
 		var handle1 = GCHandle.FromIntPtr((IntPtr)userData);
-		if (handle1.Target is not ScriptEngine scriptEngine1)
+		if (handle1.Target is not ScriptEngine ctx2)
 			throw new ArgumentException("A userdata 2000 is occupied by something different than ScriptEngine instance");
-		return scriptEngine1;
+		return ctx2;
 	}
 
 	#region Memory Management
@@ -619,50 +625,38 @@ public unsafe class ScriptEngine {
 		var ptr = GetModule(null);
 		if (ptr is null)
 			return null;
-		return new ScriptModule(ptr);
-		throw new NotImplementedException();
-		//return ScriptModule.FromPtr(ptr);
+		return ScriptModule.FromPtr(ptr, true, true);
 	}
 
 	public ScriptModule GetOrCreateModule() {
 		var ptr = GetModule(null, asEGMFlags.asGM_CREATE_IF_NOT_EXISTS);
-		return new ScriptModule(ptr);
-		//TODO:
-		//return ScriptModule.FromPtr(ptr);
+		return ScriptModule.FromPtr(ptr, true, true);
 	}
 	
 	public ScriptModule CreateModule() {
 		var ptr = GetModule(null, asEGMFlags.asGM_ALWAYS_CREATE);
-		return new ScriptModule(ptr);
-		//TODO:
-		//return ScriptModule.FromPtr(ptr);
+		return ScriptModule.FromPtr(ptr, true, true);
 	}
 	public ScriptModule? GetModule(string module) {
 		fixed (char* modPtr = module) {
 			var ptr = GetModule((byte*)modPtr);
 			if (ptr is null)
 				return null;
-			return new ScriptModule(ptr);
-			//TODO:
-			//return ScriptModule.FromPtr(ptr);
+			return ScriptModule.FromPtr(ptr, true, true);
 		}
 	}
 
 	public ScriptModule GetOrCreateModule(string module) {
 		fixed (char* modPtr = module) {
 			var ptr = GetModule((byte*)modPtr, asEGMFlags.asGM_CREATE_IF_NOT_EXISTS);
-			return new ScriptModule(ptr);
-			//TODO:
-			//return ScriptModule.FromPtr(ptr);
+			return ScriptModule.FromPtr(ptr, true, true);
 		}
 	}
 	
 	public ScriptModule CreateModule(string module) {
 		fixed (char* modPtr = module) {
 			var ptr = GetModule((byte*)modPtr, asEGMFlags.asGM_ALWAYS_CREATE);
-			return new ScriptModule(ptr);
-			//throw new NotImplementedException();
-			//return ScriptModule.FromPtr(ptr);
+			return ScriptModule.FromPtr(ptr, true, true);
 		}
 	}
 	
@@ -742,15 +736,152 @@ public unsafe class ScriptEngine {
 	/// <br/><br/>
 	/// The type values 1000 through 1999 are reserved for use by the official add-ons.
 	/// <br/><br/>
-	/// Optionally, a callback function can be registered to clean up the user data when the engine is destroyed. 
+	/// The type value 2000 are reserved for use by the bindings.
+	/// <br/><br/>
+	/// Optionally, an event can be subscribed to clean up the user data when the engine is destroyed. 
 	/// </remarks>
-	public void *SetUserData(void *data, asPWORD type = 0) => ScriptEngine_SetUserData(this, data, type);
+	public IntPtr SetUserDataPtr(IntPtr data, asPWORD type = 0) => (IntPtr)ScriptEngine_SetUserData(this, (void*)data, type);
 	/// <summary>
 	/// Returns the address of the previously registered user data
 	/// </summary>
 	/// <param name="type">An identifier specifying the user data to get</param>
 	/// <returns>The pointer to the user data</returns>
-	public void *GetUserData(asPWORD type = 0) => ScriptEngine_GetUserData(this, type);
+	public IntPtr GetUserDataPtr(asPWORD type = 0) => (IntPtr)ScriptEngine_GetUserData(this, type);
+	
+	public delegate void CleanEngine(ScriptEngine engine);
+	public delegate void CleanModule(ScriptModule module); 
+	public delegate void CleanContext(ScriptContext context); 
+	public delegate void CleanFunction(ScriptFunction function); 
+	public delegate void CleanTypeInfo(TypeInfo typeInfo);
+	public delegate void CleanObject(ScriptObject @object);
+	
+	#region UserData Native Callbacks
+	[UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+	private static void OnEngineUserDataCleanup(asScriptEngine* enginePtr) {
+		ScriptEngine engine;
+		try {
+			engine = ScriptEngine.FromPtr(enginePtr);
+		}
+		catch (Exception e) {
+			Console.Error.WriteLine("An exception occured while getting the ScriptEngine object. The data will NOT be cleaned up.\n{0}", e);
+			return;
+		}
+		try {
+			var handle = GCHandle.FromIntPtr(engine.GetUserDataPtr(2000));
+			handle.Free();
+		}
+		catch (Exception e) {
+			Console.Error.WriteLine("An exception occured while invoking the ScriptModule clean up event. The data may NOT be cleaned up.\n{0}", e);
+			return;
+		}
+	}
+	
+	[UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+	private static void OnModuleUserDataCleanup(asScriptModule* ptr) {
+		ScriptModule obj;
+		ScriptEngine engine;
+		try {
+			obj = ScriptModule.FromPtr(ptr);
+			engine = obj.Engine;
+		}
+		catch (Exception e) {
+			Console.Error.WriteLine("An exception occured while getting the ScriptModule object. The data will NOT be cleaned up.\n{0}", e);
+			return;
+		}
+		try {
+			var handle = GCHandle.FromIntPtr(obj.GetUserDataPtr(2000));
+			handle.Free();
+		}
+		catch (Exception e) {
+			Console.Error.WriteLine("An exception occured while invoking the ScriptModule clean up event. The data may NOT be cleaned up.\n{0}", e);
+		}
+	}
+	
+	[UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+	private static void OnFunctionUserDataCleanup(asScriptFunction* ptr) {
+		ScriptFunction obj;
+		ScriptEngine engine;
+		try {
+			obj = ScriptFunction.FromPtr(ptr);
+			engine = obj.Engine;
+		}
+		catch (Exception e) {
+			Console.Error.WriteLine("An exception occured while getting the ScriptFunction object. The data will NOT be cleaned up.\n{0}", e);
+			return;
+		}
+		try {
+			var handle = GCHandle.FromIntPtr(obj.GetUserDataPtr(2000));
+			handle.Free();
+		}
+		catch (Exception e) {
+			Console.Error.WriteLine("An exception occured while invoking the ScriptFunction clean up event. The data may NOT be cleaned up.\n{0}", e);
+		}
+	}
+	
+	[UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+	private static void OnContextUserDataCleanup(asScriptContext* ptr) {
+		ScriptContext obj;
+		ScriptEngine engine;
+		try {
+			obj = ScriptContext.FromPtr(ptr);
+			engine = obj.Engine;
+		}
+		catch (Exception e) {
+			Console.Error.WriteLine("An exception occured while getting the ScriptContext object. The data will NOT be cleaned up.\n{0}", e);
+			return;
+		}
+		try {
+			var handle = GCHandle.FromIntPtr(obj.GetUserDataPtr(2000));
+			handle.Free();
+		}
+		catch (Exception e) {
+			Console.Error.WriteLine("An exception occured while invoking the ScriptContext clean up event. The data may NOT be cleaned up.\n{0}", e);
+		}
+	}
+	
+	[UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+	private static void OnTypeInfoUserDataCleanup(asTypeInfo* ptr) {
+		TypeInfo obj;
+		ScriptEngine engine;
+		try {
+			obj = TypeInfo.FromPtr(ptr);
+			engine = obj.Engine;
+		}
+		catch (Exception e) {
+			Console.Error.WriteLine("An exception occured while getting the TypeInfo object. The data will NOT be cleaned up.\n{0}", e);
+			return;
+		}
+		try {
+			var handle = GCHandle.FromIntPtr(obj.GetUserDataPtr(2000));
+			handle.Free();
+		}
+		catch (Exception e) {
+			Console.Error.WriteLine("An exception occured while invoking the TypeInfo clean up event. The data may NOT be cleaned up.\n{0}", e);
+		}
+	}
+	
+	[UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+	private static void OnObjectUserDataCleanup(asScriptObject* ptr) {
+		ScriptObject obj;
+		ScriptEngine engine;
+		try {
+			obj = ScriptObject.FromPtr(ptr);
+			engine = obj.Engine;
+		}
+		catch (Exception e) {
+			Console.Error.WriteLine("An exception occured while getting the ScriptEngine object. The data will NOT be cleaned up.\n{0}", e);
+			return;
+		}
+		try {
+			var handle = GCHandle.FromIntPtr(obj.GetUserDataPtr(2000));
+			handle.Free();
+		}
+		catch (Exception e) {
+			Console.Error.WriteLine("An exception occured while invoking the clean up event. The data may NOT be cleaned up.\n{0}", e);
+		}
+	}
+	#endregion
+	
 	/// <summary>
 	/// Set the function that should be called when the engine is destroyed
 	/// </summary>
@@ -761,8 +892,8 @@ public unsafe class ScriptEngine {
 	/// <br/><br/>
 	/// The function is called from within the engine destructor, so the callback should not be used for anything but cleaning up the user data itself. 
 	/// </remarks>
-	public void SetEngineUserDataCleanupCallback(IntPtr callback, asPWORD type = 0) => 
-		ScriptEngine_SetEngineUserDataCleanupCallback(this, callback, type);
+	public void SetEngineUserDataPtrCleanupCallback(delegate*unmanaged[Cdecl]<asScriptEngine*,void> callback, asPWORD type = 0) => 
+		ScriptEngine_SetEngineUserDataCleanupCallback(this, (IntPtr)callback, type);
 	/// <summary>
 	/// Set the function that should be called when the module is destroyed
 	/// </summary>
@@ -773,36 +904,54 @@ public unsafe class ScriptEngine {
 	/// <br/><br/>
 	/// The function is called from within the module destructor, so the callback should not be used for anything but cleaning up the user data itself. 
 	/// </remarks>
-	public void  SetModuleUserDataCleanupCallback(IntPtr callback, asPWORD type = 0) => 
-		ScriptEngine_SetModuleUserDataCleanupCallback(this, callback, type);
+	public void  SetModuleUserDataPtrCleanupCallback(delegate*unmanaged[Cdecl]<asScriptModule*,void> callback, asPWORD type = 0) => 
+		ScriptEngine_SetModuleUserDataCleanupCallback(this, (IntPtr)callback, type);
 	/// <summary>
 	/// Set the function that should be called when a context is destroyed
 	/// </summary>
 	/// <param name="callback"></param>
 	/// <param name="type"></param>
-	public void  SetContextUserDataCleanupCallback(IntPtr callback, asPWORD type = 0) => 
-		ScriptEngine_SetContextUserDataCleanupCallback(this, callback, type);
+	public void  SetContextUserDataPtrCleanupCallback(delegate*unmanaged[Cdecl]<asScriptContext*,void> callback, asPWORD type = 0) => 
+		ScriptEngine_SetContextUserDataCleanupCallback(this, (IntPtr)callback, type);
 	/// <summary>
 	/// Set the function that should be called when a function is destroyed
 	/// </summary>
 	/// <param name="callback"></param>
 	/// <param name="type"></param>
-	public void  SetFunctionUserDataCleanupCallback(IntPtr callback, asPWORD type = 0) => 
-		ScriptEngine_SetFunctionUserDataCleanupCallback(this, callback, type);
+	public void  SetFunctionUserDataPtrCleanupCallback(delegate*unmanaged[Cdecl]<asScriptFunction*,void> callback, asPWORD type = 0) => 
+		ScriptEngine_SetFunctionUserDataCleanupCallback(this, (IntPtr)callback, type);
 	/// <summary>
 	/// Set the function that should be called when a type info is destroyed
 	/// </summary>
 	/// <param name="callback"></param>
 	/// <param name="type"></param>
-	public void  SetTypeInfoUserDataCleanupCallback(IntPtr callback, asPWORD type = 0) => 
-		ScriptEngine_SetTypeInfoUserDataCleanupCallback(this, callback, type);
+	public void  SetTypeInfoUserDataPtrCleanupCallback(delegate*unmanaged[Cdecl]<asTypeInfo*,void> callback, asPWORD type = 0) => 
+		ScriptEngine_SetTypeInfoUserDataCleanupCallback(this, (IntPtr)callback, type);
 	/// <summary>
 	/// Set the function that should be called when a script object is destroyed
 	/// </summary>
 	/// <param name="callback"></param>
 	/// <param name="type"></param>
-	public void  SetScriptObjectUserDataCleanupCallback(IntPtr callback, asPWORD type = 0) => 
-		ScriptEngine_SetScriptObjectUserDataCleanupCallback(this, callback, type);
+	public void  SetScriptObjectUserDataPtrCleanupCallback(delegate*unmanaged[Cdecl]<asScriptObject*,void> callback, asPWORD type = 0) => 
+		ScriptEngine_SetScriptObjectUserDataCleanupCallback(this, (IntPtr)callback, type);
+
+	//TODO: figure out a better way to store those stuff, since it will be accessible only in managed realm and it can be lost on managed to native to managed transition
+	private Dictionary<int, object> _managedUserdata = new();
+
+	public void SetUserData(object? obj, int type = 0) {
+		if (obj is null) {
+			_managedUserdata.Remove(type);
+			return;
+		}
+		_managedUserdata.Add(type, obj);
+	}
+
+	public object? GetUserData(int type = 0) {
+		_managedUserdata.TryGetValue(type, out var obj);
+		return obj;
+	}
+
+	public T? GetUserData<T>(int type = 0) => (T?)GetUserData(type);
 	#endregion
 
 	#region Exception handling

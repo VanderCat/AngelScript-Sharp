@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace AngelScript;
 
@@ -9,7 +10,26 @@ public unsafe class ScriptFunction {
 	internal ScriptFunction(asScriptFunction* type) {
 		Handle = type;
 	}
-	public asScriptEngine* GetEngine() => ScriptFunction_GetEngine(this);
+	
+	public static ScriptFunction FromPtr(asScriptFunction* ctx, bool useUserdata = true, bool createUserdata = false) {
+		if (!useUserdata)
+			return new ScriptFunction(ctx);
+		var userData = ScriptFunction_GetUserData(ctx, 2000);
+		if (userData is null) {
+			if (!createUserdata)
+				throw new NullReferenceException("Provided pointer have not been instantiated in managed realm");
+			var scriptContext = new ScriptFunction(ctx);
+			var handle = GCHandle.Alloc(scriptContext, GCHandleType.Normal);
+			ScriptFunction_SetUserData(ctx, (void*)GCHandle.ToIntPtr(handle), 2000);
+			return scriptContext;
+		}
+		var handle1 = GCHandle.FromIntPtr((IntPtr)userData);
+		if (handle1.Target is not ScriptFunction ctx2)
+			throw new ArgumentException("A userdata 2000 is occupied by something different than ScriptFunction instance");
+		return ctx2;
+	}
+	
+	public ScriptEngine Engine => ScriptEngine.FromPtr(ScriptFunction_GetEngine(this));
 
 	#region Memory management
 	public int AddRef() => ScriptFunction_AddRef(this);
@@ -112,7 +132,24 @@ public unsafe class ScriptFunction {
 	public IntPtr GetJITFunction() => ScriptFunction_GetJITFunction(this);
 	#endregion
 	#region User data
-	public void* SetUserData(void* userData, asPWORD type = 0) => ScriptFunction_SetUserData(this, userData, type);
-	public void* GetUserData(asPWORD type = 0) => ScriptFunction_GetUserData(this, type);
+	public IntPtr SetUserDataPtr(IntPtr userData, asPWORD type = 0) => (IntPtr)ScriptFunction_SetUserData(this, (void*)userData, type);
+	public IntPtr GetUserDataPtr(asPWORD type = 0) => (IntPtr)ScriptFunction_GetUserData(this, type);
+	
+	private Dictionary<int, object> _managedUserdata = new();
+
+	public void SetUserData(object? obj, int type = 0) {
+		if (obj is null) {
+			_managedUserdata.Remove(type);
+			return;
+		}
+		_managedUserdata.Add(type, obj);
+	}
+
+	public object? GetUserData(int type = 0) {
+		_managedUserdata.TryGetValue(type, out var obj);
+		return obj;
+	}
+
+	public T? GetUserData<T>(int type = 0) => (T?)GetUserData(type);
 	#endregion
 }

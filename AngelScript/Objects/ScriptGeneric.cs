@@ -10,6 +10,8 @@ public unsafe class ScriptGeneric {
     internal ScriptGeneric(asScriptGeneric* generic) {
         Handle = generic;
     }
+    
+    public static ScriptGeneric FromPtr(asScriptGeneric* ctx) => new(ctx);
 
     private ScriptEngine? _engine;
     private ScriptFunction? _function;
@@ -27,8 +29,7 @@ public unsafe class ScriptGeneric {
             if (_function is not null)
                 return _function;
             var ptr = ScriptGeneric_GetFunction(this);
-            //TODO:
-            return _function = new ScriptFunction(ptr);
+            return _function = ScriptFunction.FromPtr(ptr, true, true);
         }
     }
     public IntPtr Auxiliary => (IntPtr)ScriptGeneric_GetAuxiliary(this);

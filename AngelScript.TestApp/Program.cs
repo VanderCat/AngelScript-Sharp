@@ -119,7 +119,7 @@ internal unsafe class Program {
         if (handle.Target is string str)
             Console.WriteLine(str);
     }
-
+    
     private static void FloatPrinter(float meow) {
         Console.WriteLine($"The application requested to print {meow}");
     }
@@ -238,7 +238,6 @@ internal unsafe class Program {
             Console.Write("The script function returned: ");
             Console.WriteLine(returnValue);
         }
-
         // We must release the contexts when no longer using them
         ctx.Release();
 

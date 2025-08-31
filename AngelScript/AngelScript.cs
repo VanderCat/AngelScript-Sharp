@@ -45,9 +45,7 @@ public static unsafe class AngelScript {
             var ptr = GetActiveContext();
             if (ptr is null)
                 return null;
-            return new ScriptContext(ptr);
-            //TODO:
-            //return ScriptContext.FromPtr(ptr);
+            return ScriptContext.FromPtr(ptr, true, true);
         }
     }
 

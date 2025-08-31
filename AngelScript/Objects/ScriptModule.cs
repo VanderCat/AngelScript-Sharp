@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace AngelScript;
@@ -9,10 +10,43 @@ public unsafe class ScriptModule {
 	internal ScriptModule(asScriptModule* module) {
 		Handle = module;
 	}
+	
+	public static ScriptModule FromPtr(asScriptModule* ctx, bool useUserdata = true, bool createUserdata = false) {
+		if (!useUserdata)
+			return new ScriptModule(ctx);
+		var userData = ScriptModule_GetUserData(ctx, 2000);
+		if (userData is null) {
+			if (!createUserdata)
+				throw new NullReferenceException("Provided pointer have not been instantiated in managed realm");
+			var scriptContext = new ScriptModule(ctx);
+			var handle = GCHandle.Alloc(scriptContext, GCHandleType.Normal);
+			ScriptModule_SetUserData(ctx, (void*)GCHandle.ToIntPtr(handle), 2000);
+			return scriptContext;
+		}
+		var handle1 = GCHandle.FromIntPtr((IntPtr)userData);
+		if (handle1.Target is not ScriptModule ctx2)
+			throw new ArgumentException("A userdata 2000 is occupied by something different than ScriptModule instance");
+		return ctx2;
+	}
 
-	public asScriptEngine* GetEngine() => ScriptModule_GetEngine(this);
-	public void SetName(byte* name) => ScriptModule_SetName(this, (sbyte*)name);
-	public byte* GetName() => (byte*)ScriptModule_GetName(this);
+	public ScriptEngine Engine => ScriptEngine.FromPtr(ScriptModule_GetEngine(this));
+	internal void SetName(byte* name) => ScriptModule_SetName(this, (sbyte*)name);
+	internal byte* GetName() => (byte*)ScriptModule_GetName(this);
+
+	public string? Name {
+		get {
+			var ptr = GetName();
+			return Util.ConvertPtrToString(ptr);
+		}
+		set {
+			if (value is null) {
+				SetName(null);
+				return;
+			}
+			fixed (byte* name = Encoding.UTF8.GetBytes(value + '\0'))
+				SetName(name);
+		}
+	}
 	public void Discard() => ScriptModule_Discard(this);
 
 	#region Compilation
@@ -113,9 +147,7 @@ public unsafe class ScriptModule {
 			var ptr = GetFunctionByDeclRaw(declPtr);
 			if (ptr is null)
 				return null;
-			return new ScriptFunction(ptr);
-			//TODO:
-			//return ScriptFunction.FromPtr(ptr);
+			return ScriptFunction.FromPtr(ptr, true, true);
 		}
 	}
 	public asScriptFunction* GetFunctionByName(byte* name) => ScriptModule_GetFunctionByName(this, (sbyte*)name);
@@ -169,7 +201,24 @@ public unsafe class ScriptModule {
 	#endregion
 	
 	#region User data
-	public void* SetUserData(void* data, asPWORD type = 0) => ScriptModule_SetUserData(this, data, type);
-	public void* GetUserData(asPWORD type = 0) => ScriptModule_GetUserData(this, type);
+	public IntPtr SetUserDataPtr(IntPtr data, asPWORD type = 0) => (IntPtr)ScriptModule_SetUserData(this, (void*)data, type);
+	public IntPtr GetUserDataPtr(asPWORD type = 0) => (IntPtr)ScriptModule_GetUserData(this, type);
+	
+	private Dictionary<int, object> _managedUserdata = new();
+
+	public void SetUserData(object? obj, int type = 0) {
+		if (obj is null) {
+			_managedUserdata.Remove(type);
+			return;
+		}
+		_managedUserdata.Add(type, obj);
+	}
+
+	public object? GetUserData(int type = 0) {
+		_managedUserdata.TryGetValue(type, out var obj);
+		return obj;
+	}
+
+	public T? GetUserData<T>(int type = 0) => (T?)GetUserData(type);
 	#endregion
 }

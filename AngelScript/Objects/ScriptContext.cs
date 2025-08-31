@@ -36,8 +36,7 @@ public unsafe class ScriptContext {
     #endregion
 
 	#region Miscellaneous
-	public asScriptEngine* GetEngine(bool useUserdata = true, bool createUserdata = false) => 
-		ScriptEngine.FromPtr(ScriptContext_GetEngine(this), useUserdata, createUserdata);
+	public ScriptEngine Engine => ScriptEngine.FromPtr(ScriptContext_GetEngine(this));
 	#endregion
 	#region Execution
 	public int Prepare(asScriptFunction* func) => ScriptContext_Prepare(this, func);
@@ -122,9 +121,7 @@ public unsafe class ScriptContext {
 		var ptr = GetExceptionFunctionRaw();
 		if (ptr is null)
 			return null;
-		return new ScriptFunction(ptr);
-		//TODO:
-		//return ScriptFunction.FromPtr(ptr);
+		return ScriptFunction.FromPtr(ptr, true, true);
 	}
 	internal byte* GetExceptionStringRaw() 
 		=> (byte*)ScriptContext_GetExceptionString(this);
@@ -154,8 +151,25 @@ public unsafe class ScriptContext {
 	public asScriptFunction* GetSystemFunction() => ScriptContext_GetSystemFunction(this);
 	#endregion
 	#region User data
-	public void* SetUserData(void* data, asPWORD type = 0) => ScriptContext_SetUserData(this, data, type);
-	public void* GetUserData(asPWORD type = 0) => ScriptContext_GetUserData(this, type);
+	public IntPtr SetUserDataPtr(IntPtr data, asPWORD type = 0) => (IntPtr)ScriptContext_SetUserData(this, (void*)data, type);
+	public IntPtr GetUserDataPtr(asPWORD type = 0) => (IntPtr)ScriptContext_GetUserData(this, type);
+	
+	private Dictionary<int, object> _managedUserdata = new();
+
+	public void SetUserData(object? obj, int type = 0) {
+		if (obj is null) {
+			_managedUserdata.Remove(type);
+			return;
+		}
+		_managedUserdata.Add(type, obj);
+	}
+
+	public object? GetUserData(int type = 0) {
+		_managedUserdata.TryGetValue(type, out var obj);
+		return obj;
+	}
+
+	public T? GetUserData<T>(int type = 0) => (T?)GetUserData(type);
 	#endregion
 	#region Serialization
 	public int StartDeserialization() => ScriptContext_StartDeserialization(this);
