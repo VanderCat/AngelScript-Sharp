@@ -1,10 +1,11 @@
+using System.Reflection;
 using System.Runtime.InteropServices;
 
 namespace AngelScript.Interop;
 
 [StructLayout(LayoutKind.Explicit)]
 public unsafe struct asSFuncPtr {
-    public asSFuncPtr(byte f = 0) {
+    public asSFuncPtr(Type f) {
         for(UIntPtr n = 0; n < 25; n++ )
             dummy[n] = 0;
         flag = f;
@@ -22,13 +23,31 @@ public unsafe struct asSFuncPtr {
     //public asMETHOD_t mthd;
     [FieldOffset(0)]
     public IntPtr func = 0;
+    [FieldOffset(9)]
+    public IntPtr handle = 0; //GCHandle for managed stuff 
     [FieldOffset(25)]
-    public byte flag; // 1 = generic, 2 = global func, 3 = method
+    public Type flag;
 
-    public static asSFuncPtr asFunctionPtr(IntPtr ptr) {
-        // Mark this as a global function
-        var sfuncptr = new asSFuncPtr(2);
-        sfuncptr.func = ptr;
-        return sfuncptr;
+    public enum Type : byte {
+        Generic = 1,
+        Global = 2,
+        Method = 3,
+        Delegate = 4,
+    }
+
+    public static asSFuncPtr FromUnmanagedPtr(IntPtr ptr) => new(Type.Global) {
+        func = ptr
+    };
+
+    public static asSFuncPtr FromUnmanagedCallersOnly(MethodInfo info) => new(Type.Global) {
+        func = info.MethodHandle.GetFunctionPointer(),
+    };
+
+    public static asSFuncPtr FromUnmanagedCallersOnly<TParent>(string name) {
+        var method = typeof(TParent).GetMethod(name, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        if (method is null)
+            throw new ArgumentException();
+
+        return FromUnmanagedCallersOnly(method);
     }
 }

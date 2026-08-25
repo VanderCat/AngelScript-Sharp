@@ -25,7 +25,7 @@ public unsafe interface IStringFactory {
     /// If the same instance is returned multiple times the string factory must keep track of the number of instances as ReleaseStringConstant will
     /// be called for each of them. 
     /// </remarks>
-    public void* GetStringConstant(byte* data, uint length);
+    public void* GetStringConstant(ReadOnlySpan<char> data);
     /// <summary>
     /// Called by engine when the string constant is no longer used
     /// </summary>
@@ -36,7 +36,7 @@ public unsafe interface IStringFactory {
     /// If the string factory returns a pointer to the same instance multiple times,
     /// then the string instance can only be destroyed when the last call to ReleaseStringConstant for that pointer is made.
     /// </remarks>
-    public asERetCodes ReleaseStringConstant(void* str);
+    public RetCode ReleaseStringConstant(void* str);
     
     /// <summary>
     /// Called by engine to get the raw string data for serialization
@@ -50,8 +50,7 @@ public unsafe interface IStringFactory {
     /// Then the engine will call the method once more with the allocated data buffer to be filled with the content.
     /// The length should always be informed in number of bytes. 
     /// </remarks>
-    public asERetCodes GetRawStringData(void* str, sbyte* data, uint* length);
-    public asERetCodes Destroy();
+    public RetCode GetRawStringData(void* str, char* data, uint* length);
     
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     internal static asERetCodes StringFactoryReleaseStringConstant(void* str, void* userdata) {
@@ -61,35 +60,35 @@ public unsafe interface IStringFactory {
         if (handle.Target is not IStringFactory stringFactory)
             return asERetCodes.asERROR;
         try {
-            return stringFactory.ReleaseStringConstant(str);
+            return (asERetCodes)stringFactory.ReleaseStringConstant(str);
         } catch (Exception e) {
             return asERetCodes.asERROR;
         }
     }
     
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    internal static void* StringFactoryGetStringConstant(byte* data, uint length, void* userdata) {
+    internal static void* StringFactoryGetStringConstant(char* data, uint length, void* userdata) {
         if (userdata is null)
             return null;
         var handle = GCHandle.FromIntPtr((IntPtr)userdata);
         if (handle.Target is not IStringFactory stringFactory)
             return null;
         try {
-            return stringFactory.GetStringConstant(data, length);
+            return stringFactory.GetStringConstant(new ReadOnlySpan<char>(data, (int)length/2));
         } catch (Exception e) {
             return null;
         }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    internal static asERetCodes StringFactoryGetRawStringData(void* str, sbyte* data, uint* length, void* userdata) {
+    internal static asERetCodes StringFactoryGetRawStringData(void* str, char* data, uint* length, void* userdata) {
         if (userdata is null)
             return asERetCodes.asERROR;
         var handle = GCHandle.FromIntPtr((IntPtr)userdata);
         if (handle.Target is not IStringFactory stringFactory)
             return asERetCodes.asERROR;
         try {
-            return stringFactory.GetRawStringData(str, data, length);
+            return (asERetCodes)stringFactory.GetRawStringData(str, data, length);
         } catch (Exception e) {
             return asERetCodes.asERROR;
         }
@@ -99,11 +98,12 @@ public unsafe interface IStringFactory {
     internal static asERetCodes StringFactoryDestroy(void* userdata) {
         if (userdata is null)
             return asERetCodes.asERROR;
-        var handle = GCHandle.FromIntPtr((IntPtr)userdata);
-        if (handle.Target is not IStringFactory stringFactory)
-            return asERetCodes.asERROR;
         try {
-            return stringFactory.Destroy();
+            var handle = GCHandle.FromIntPtr((IntPtr)userdata);
+            handle.Free();
+            if (handle.Target is IDisposable disposable)
+                disposable.Dispose();
+            return asERetCodes.asSUCCESS;
         } catch (Exception e) {
             return asERetCodes.asERROR;
         }

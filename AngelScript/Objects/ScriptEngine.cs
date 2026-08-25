@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -105,12 +106,12 @@ public unsafe class ScriptEngine : IDisposable {
 	/// <summary>
 	/// Dynamically change some engine properties
 	/// </summary>
-	/// <param name="property">One of the <see cref="asEEngineProp"/> values</param>
+	/// <param name="property">One of the <see cref="EngineProperty"/> values</param>
 	/// <param name="value">The new value of the property</param>
 	/// <remarks>With this method you can change the way the script engine works in some regards</remarks>
 	/// <exception cref="ArgumentException">Invalid property</exception>
-	public void SetEngineProperty(asEEngineProp property, asPWORD value) {
-		var ret = (RetCode)ScriptEngine_SetEngineProperty(this, property, value);
+	public void SetEngineProperty(EngineProperty property, asPWORD value) {
+		var ret = (RetCode)ScriptEngine_SetEngineProperty(this, (asEEngineProp)property, value);
 		if (ret == RetCode.InvalidArg)
 			throw new ArgumentException(ret.GetDescription(), nameof(value));
 		if (ret != RetCode.Success)
@@ -119,10 +120,10 @@ public unsafe class ScriptEngine : IDisposable {
 	/// <summary>
 	/// Retrieve current engine property settings
 	/// </summary>
-	/// <param name="property">One of the <see cref="asEEngineProp"/> values</param>
+	/// <param name="property">One of the <see cref="EngineProperty"/> values</param>
 	/// <returns>The value of the property, or 0 if it is an invalid property</returns>
 	/// <remarks>Calling this method lets you determine the current value of the engine properties</remarks>
-	public asPWORD GetEngineProperty(asEEngineProp property) => ScriptEngine_GetEngineProperty(this, property);
+	public asPWORD GetEngineProperty(EngineProperty property) => ScriptEngine_GetEngineProperty(this, (asEEngineProp)property);
 	#endregion
 
 	#region Compiler messages
@@ -149,6 +150,22 @@ public unsafe class ScriptEngine : IDisposable {
 			default: throw ret.GetException();
 		}
 	}
+
+	[UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+	private static void NativeMessageCallback(asSMessageInfo* messageInfo, void* param) {
+		var handle = GCHandle.FromIntPtr((IntPtr)param);
+		if (handle.Target is Action<MessageInfo> action)
+			action(new MessageInfo(messageInfo));
+	}
+
+	private static readonly asSFuncPtr* MessageCallbackPtr = (asSFuncPtr*)GCHandle.Alloc(
+		asSFuncPtr.FromUnmanagedCallersOnly<ScriptEngine>(nameof(NativeMessageCallback)), GCHandleType.Pinned).AddrOfPinnedObject();
+	
+	public void SetMessageCallback(Action<MessageInfo> callback) {
+		var handle = GCHandle.Alloc(callback, GCHandleType.Normal);
+		SetMessageCallback(MessageCallbackPtr, (void*)GCHandle.ToIntPtr(handle), asECallConvTypes.asCALL_CDECL);
+		
+	}
 	/// <summary>
 	/// Gets the current message callback
 	/// </summary>
@@ -167,12 +184,45 @@ public unsafe class ScriptEngine : IDisposable {
 			default: throw ret.GetException();
 		}
 	}
+	
+	public bool TryGetMessageCallback([MaybeNullWhen(false)] out Action<MessageInfo> callback) {
+		asECallConvTypes convType;
+		asSFuncPtr callbackNative;
+		void* handle;
+		var ret = (RetCode)ScriptEngine_GetMessageCallback(this, &callbackNative, &handle, (asDWORD*)&convType);
+		switch (ret) {
+			case RetCode.Success:
+				if (GCHandle.FromIntPtr((IntPtr)handle).Target is Action<MessageInfo> callback1) {
+					callback = callback1;
+					return true;
+				}
+				callback = null;
+				return false;
+			case RetCode.NoFunction:
+				callback = null;
+				return false;
+			default: throw ret.GetException();
+		}
+	}
 	/// <summary>
 	/// Clears the registered message callback routine
 	/// </summary>
-	/// <returns>A negative value on error</returns>
 	/// <remarks>Call this method to remove the message callback</remarks>
 	public void ClearMessageCallback() {
+		asECallConvTypes convType;
+		asSFuncPtr callback;
+		void* handle;
+		var ret1 = (RetCode)ScriptEngine_GetMessageCallback(this, &callback, &handle, (asDWORD*)&convType);
+		switch (ret1) {
+			case RetCode.Success:
+				if (callback.func == MessageCallbackPtr->func)
+					GCHandle.FromIntPtr((IntPtr)handle).Free();
+				break;
+			case RetCode.NoFunction:
+				break;
+			default: throw ret1.GetException();
+		}
+		
 		var ret = (RetCode)ScriptEngine_ClearMessageCallback(this);
 		switch (ret) {
 			case RetCode.Success: break;
@@ -258,48 +308,62 @@ public unsafe class ScriptEngine : IDisposable {
 			default: throw ret.GetException();
 		}
 	}
-	[UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-	private static void NativeDelegateInvoke(asScriptGeneric* asScriptGeneric) {
-		try {
-			DelegateInvoke(new ScriptGeneric(asScriptGeneric));
-		}
-		catch (Exception e) {
-			AngelScript.ActiveContext?.SetException(e.ToString());
-		}
-	}
 
-	private static void DelegateInvoke(ScriptGeneric generic) {
-		if (generic.Auxiliary == 0)
-			throw new Exception("No auxiliary present");
-		var handle = GCHandle.FromIntPtr(generic.Auxiliary);
-		if (handle.Target is not MethodInfo info)
-			throw new InvalidCastException("The auxilary is not a MethodInfo");
-		var func = generic.Function;
-		var funcParamCount = func.ParamCount;
-		var methodParams = info.GetParameters();
-		if (funcParamCount != methodParams.Length)
-			throw new TargetInvocationException(new Exception("Parameter count mismatch"));
-		var args = new object?[funcParamCount];
-		for (var i = 0; i < args.Length; i++) {
-			var paramInfo = methodParams[i];
-			if (!paramInfo.ParameterType.IsPrimitive)
-				throw new NotImplementedException("Non primitive type are not supported");
-			switch (Type.GetTypeCode(paramInfo.ParameterType)) {
-				case TypeCode.Byte: args[i] = generic.GetArgByte(i); break;
-				case TypeCode.UInt16: args[i] = generic.GetArgWord(i); break;
-				case TypeCode.UInt32: args[i] = generic.GetArgDWord(i); break;
-				case TypeCode.UInt64: args[i] = generic.GetArgQWord(i); break;
-				case TypeCode.Single: args[i] = generic.GetArgFloat(i); break;
-				case TypeCode.Double: args[i] = generic.GetArgDouble(i); break;
-				default: throw new ArgumentException("Unsupported argument type "+paramInfo.ParameterType, paramInfo.Name);
-			}
+	internal string GetStringType(Type t) {
+		switch (Type.GetTypeCode(t)) {
+			case TypeCode.Empty:
+				throw new NotSupportedException();
+			case TypeCode.Object:
+				if (t == typeof(void))
+					return "void";
+				return t.Name;
+			case TypeCode.DBNull:
+				throw new NotSupportedException();
+			case TypeCode.Boolean:
+				return "bool";
+			case TypeCode.Char:
+				return "int16";
+			case TypeCode.SByte:
+				return "byte";
+			case TypeCode.Byte:
+				return "byte";
+			case TypeCode.Int16:
+				return "int16";
+			case TypeCode.UInt16:
+				return "uint16";
+			case TypeCode.Int32:
+				return "int32";
+			case TypeCode.UInt32:
+				return "uint32";
+			case TypeCode.Int64:
+				return "int64";
+			case TypeCode.UInt64:
+				return "uint16";
+			case TypeCode.Single:
+				return "float";
+			case TypeCode.Double:
+				return "double";
+			case TypeCode.Decimal:
+				throw new NotImplementedException();
+			case TypeCode.DateTime:
+				throw new NotImplementedException();
+			case TypeCode.String:
+				return "string";
+			default:
+				throw new ArgumentOutOfRangeException();
 		}
-		info.Invoke(null, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, args, null);
 	}
-	public int RegisterGlobalFunction(string declaration, Delegate @delegate) {
-		var ptr = asSFuncPtr.asFunctionPtr((IntPtr)(delegate*unmanaged[Cdecl]<asScriptGeneric*, void>)&NativeDelegateInvoke);
+	internal string GetDeclaration(MethodInfo info, string? name = null) {
+		var declName = name ?? info.Name;
+		var str = $"{GetStringType(info.ReturnType)} {declName}({string.Join(", ", info.GetParameters().Select(param=>$"{GetStringType(param.ParameterType)} {param.Name}"))})";
+		return str;
+	}
+	
+	public int RegisterGlobalFunction(Delegate @delegate, string? declOverride = null) {
+		var ptr = asSFuncPtr.FromUnmanagedCallersOnly<ScriptGeneric>(nameof(ScriptGeneric.InvokeDelegate));
 		//FIXME: memory leak, GCHandle is never released
-		fixed (byte* dec = Encoding.UTF8.GetBytes(declaration + '\0'))
+		var decl = declOverride??GetDeclaration(@delegate.Method);
+		fixed (byte* dec = Encoding.UTF8.GetBytes(decl + '\0'))
 			return RegisterGlobalFunction(dec, &ptr, asECallConvTypes.asCALL_GENERIC, (void*)GCHandle.ToIntPtr(GCHandle.Alloc(@delegate.Method)));
 	}
 
@@ -426,7 +490,7 @@ public unsafe class ScriptEngine : IDisposable {
 	/// Reference types, which have their memory managed by the application, should be registered with asOBJ_REF.
 	/// Value types, which have their memory managed by the engine, should be registered with asOBJ_VALUE.
 	/// </remarks>
-	public int RegisterObjectType(byte* obj, int byteSize, asEObjTypeFlags flags) {
+	public int RegisterObjectType(byte* obj, int byteSize, ObjectTypeFlags flags) {
 		var result = ScriptEngine_RegisterObjectType(this, (sbyte*)obj, byteSize, (UIntPtr)flags);
 		if (result >= 0) return result;
 		var ret = (RetCode)result;
@@ -470,6 +534,7 @@ public unsafe class ScriptEngine : IDisposable {
 	/// </remarks>
 	public int RegisterObjectProperty(byte* obj, byte* declaration, int byteOffset, int compositeOffset = 0, bool isCompositeIndirect = false) => 
 		ScriptEngine_RegisterObjectProperty(this, (sbyte*)obj, (sbyte*)declaration, byteOffset, compositeOffset, isCompositeIndirect);
+
 	/// <summary>
 	/// Registers a method for the object type
 	/// </summary>
@@ -496,8 +561,36 @@ public unsafe class ScriptEngine : IDisposable {
 	/// If the composite member is inline then set isCompositeIndirect as false,
 	/// else set it to true for proper indirection.
 	/// </remarks>
-	public int            RegisterObjectMethod(byte* obj, byte* declaration, asSFuncPtr* funcPointer, asECallConvTypes callConv, void* auxiliary = null, int compositeOffset = 0, bool isCompositeIndirect = false) => 
-		ScriptEngine_RegisterObjectMethod(this, (sbyte*)obj, (sbyte*)declaration, funcPointer, (asDWORD)callConv, auxiliary, compositeOffset, isCompositeIndirect);
+	public int RegisterObjectMethod(byte* obj, byte* declaration, asSFuncPtr* funcPointer, CallConvTypes callConv,
+		void* auxiliary = null, int compositeOffset = 0, bool isCompositeIndirect = false) {
+		var ret = ScriptEngine_RegisterObjectMethod(this, (sbyte*)obj, (sbyte*)declaration, funcPointer, (asDWORD)callConv, auxiliary, compositeOffset, isCompositeIndirect);
+		if (ret < 1) switch ((RetCode)ret) {
+			case RetCode.WrongConfigGroup:
+				throw new InvalidConfigurationException(
+					"The object type was registered in a different configuration group.");
+			case RetCode.NotSupported:
+				throw new NotSupportedException(
+					"The calling convention is not supported.");
+			case RetCode.InvalidType:
+				throw new ArgumentException("The obj parameter is not a valid object name.", nameof(obj));
+			case RetCode.InvalidDeclaration:
+				throw new ArgumentException("The declaration is invalid.", nameof(declaration));
+			case RetCode.NameTaken:
+				throw new NameTakenException("The name conflicts with other members.");
+			case RetCode.WrongCallingConv:
+				throw new ArgumentException("The function's calling convention isn't compatible with callConv.", nameof(callConv));
+			case RetCode.AlreadyRegistered:
+				throw new AlreadyRegisteredException(
+					"The method has already been registered with the same parameter list.");
+			case RetCode.InvalidArg:
+				throw new ArgumentException(
+					"The auxiliary pointer wasn't set according to calling convention.", nameof(auxiliary));
+			default: throw ((RetCode)ret).GetException();
+		}
+
+		return ret;
+	}
+
 	/// <summary>
 	/// Registers a behaviour for the object type
 	/// </summary>
@@ -525,8 +618,37 @@ public unsafe class ScriptEngine : IDisposable {
 	/// to the composite member, and the method pointer should be method of the composite member. If the composite member is inline
 	/// then set isCompositeIndirect as false, else set it to true for proper indirection.
 	/// </remarks>
-	public int            RegisterObjectBehaviour(byte* obj, asEBehaviours behaviour, byte* declaration, asSFuncPtr* funcPointer, asDWORD callConv, void *auxiliary = null, int compositeOffset = 0, bool isCompositeIndirect = false) => 
-		ScriptEngine_RegisterObjectBehaviour(this, (sbyte*)obj, behaviour, (sbyte*)declaration, funcPointer, callConv, auxiliary, compositeOffset, isCompositeIndirect);
+	public int RegisterObjectBehaviour(byte* obj, Behaviour behaviour, byte* declaration, asSFuncPtr* funcPointer,
+		CallConvTypes callConv, void* auxiliary = null, int compositeOffset = 0, bool isCompositeIndirect = false) {
+		var res = ScriptEngine_RegisterObjectBehaviour(this, (sbyte*)obj, (asEBehaviours)behaviour, (sbyte*)declaration, funcPointer, (asDWORD)callConv, auxiliary, compositeOffset, isCompositeIndirect);
+		if (res < 1) {
+			switch ((RetCode)res) {
+				case RetCode.WrongConfigGroup:
+					throw new InvalidConfigurationException(
+						"The object type was registered in a different configuration group.");
+				case RetCode.InvalidArg:
+					throw new ArgumentException(
+						"obj is not set, or a global behaviour is given in behaviour, or the objForThiscall pointer wasn't set according to calling convention.");
+				case RetCode.WrongCallingConv:
+					throw new ArgumentException("The function's calling convention isn't compatible with callConv.");
+				case RetCode.NotSupported:
+					throw new NotSupportedException(
+						"The calling convention or the behaviour signature is not supported.");
+				case RetCode.InvalidType:
+					throw new ArgumentException("The obj parameter is not a valid object name.", nameof(obj));
+				case RetCode.InvalidDeclaration:
+					throw new ArgumentException("The declaration is invalid.", nameof(declaration));
+				case RetCode.IllegalBehaviourForType:
+					throw new ArgumentException("The behaviour is not allowed for this type.", nameof(behaviour));
+				case RetCode.AlreadyRegistered:
+					throw new AlreadyRegisteredException(
+						"The behaviour is already registered with the same signature.");
+				default: throw ((RetCode)res).GetException();
+			}
+		}
+
+		return res;
+	}
 	/// <summary>
 	/// Registers a script interface
 	/// </summary>
@@ -577,14 +699,24 @@ public unsafe class ScriptEngine : IDisposable {
 	/// </remarks>
 	public int RegisterStringFactory(byte* datatype, IStringFactory factory) {
 		var iface = StringFactory_Create(new asSStringFactory {
-			getStringConstantFunc = (IntPtr)(delegate*unmanaged[Cdecl]<byte*, uint, void*, void*>)&IStringFactory.StringFactoryGetStringConstant,
+			getStringConstantFunc = (IntPtr)(delegate*unmanaged[Cdecl]<char*, uint, void*, void*>)&IStringFactory.StringFactoryGetStringConstant,
 			releaseStringConstantFunc = (IntPtr)(delegate*unmanaged[Cdecl]<void*, void*, asERetCodes>)&IStringFactory.StringFactoryReleaseStringConstant,
-			getRawStringDataFunc = (IntPtr)(delegate*unmanaged[Cdecl]<void*, sbyte*, uint*, void*, asERetCodes>)&IStringFactory.StringFactoryGetRawStringData,
+			getRawStringDataFunc = (IntPtr)(delegate*unmanaged[Cdecl]<void*, char*, uint*, void*, asERetCodes>)&IStringFactory.StringFactoryGetRawStringData,
 			destroyFunc = (IntPtr)(delegate*unmanaged[Cdecl]<void*, asERetCodes>)&IStringFactory.StringFactoryDestroy,
 			userdata = (void*)GCHandle.ToIntPtr(GCHandle.Alloc(factory, GCHandleType.Normal))
 		});
+		var stuff = ScriptEngine_RegisterStringFactory(this, (sbyte*)datatype, iface);
+		if (stuff < 0) {
+			switch ((RetCode)stuff) {
+				case RetCode.InvalidArg:
+					throw new ArgumentException("The factory is null.", nameof(factory));
+				case RetCode.InvalidType:
+					throw new ArgumentException("The datatype is not a valid type, or it is a reference or handle.", nameof(datatype));
+				default: throw ((RetCode)stuff).GetException();
+			}
+		}
 		//FIXME: leak
-		return ScriptEngine_RegisterStringFactory(this, (sbyte*)datatype, iface);
+		return stuff;
 	}
 		
 	//public int GetStringFactory(asDWORD* typeModifiers = null, asStringFactory** factory = 0) => ScriptEngine_(this);

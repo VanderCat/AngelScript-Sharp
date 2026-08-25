@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -6,118 +7,147 @@ using AngelScript;
 using AngelScript.Interop;
 
 internal unsafe class Program {
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void MessageCallback(asSMessageInfo* msg, void *param) {
+    // [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void MessageCallback(MessageInfo msg) {
         var type = "ERR ";
-        if( msg->type == asEMsgType.asMSGTYPE_WARNING ) 
+        if( msg.Type == MsgType.Warning ) 
             type = "WARN";
-        else if( msg->type == asEMsgType.asMSGTYPE_INFORMATION ) 
+        else if( msg.Type == MsgType.Information ) 
             type = "INFO";
-        var section = Encoding.UTF8.GetString(MemoryMarshal.CreateReadOnlySpanFromNullTerminated(msg->section));
-        var message = Encoding.UTF8.GetString(MemoryMarshal.CreateReadOnlySpanFromNullTerminated(msg->message));
-        Console.WriteLine($"{section} ({msg->row}, {msg->col}) {type} : {message}");
-    }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static asERetCodes StringFactoryReleaseStringConstant(void* str, void* userdata) {
-        if (str is null)
-            return asERetCodes.asERROR;
-
-        var handle = GCHandle.FromIntPtr((IntPtr)str);
-        handle.Free();
-        return asERetCodes.asSUCCESS;
+        Console.WriteLine($"{msg.Section} ({msg.Row}:{msg.Column}) {type} : {msg.Message}");
     }
     
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void* StringFactoryGetStringConstant(byte* data, uint length, void* userdata) {
-        Console.Write($"0x{(IntPtr)data:x} {length} 0x{(IntPtr)userdata:x} ");
-        var str = Encoding.UTF8.GetString(data, (int)length);
-        var handle = GCHandle.Alloc(str, GCHandleType.Pinned);
-        var ptr = GCHandle.ToIntPtr(handle);
-        Console.WriteLine($" 0x{ptr:x}");
-        return (void*)ptr; //0x7f078baa15f1
-    }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static asERetCodes StringFactoryGetRawStringData(void* str, sbyte* data, uint* length, void* userdata) {
-        if (str is null)
-            return asERetCodes.asERROR;
-
-        var strHandle = GCHandle.FromIntPtr((IntPtr)str);
-        var strObj = strHandle.Target;
-        if (strObj is null || strObj is not string sharpStr)
-            return asERetCodes.asERROR;
-        if (length is not null) 
-            *length = (uint)sharpStr.Length;
-
-        if (data is not null) {
-            var bytes = Encoding.UTF8.GetBytes(sharpStr);
-            fixed(byte* ptr = bytes)
-                Unsafe.CopyBlock(data, ptr, *length);
-        }
-
-        return asERetCodes.asSUCCESS;
-    }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static asERetCodes StringFactoryDestroy(void* userdata) {
-        return asERetCodes.asSUCCESS;
-    }
     
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    static IntPtr ConstructString() {
+    static void ConstructString(void** mem) {
         var str = "";
         var handle = GCHandle.Alloc(str, GCHandleType.Normal);
-        return GCHandle.ToIntPtr(handle);
+        *mem = (void*)GCHandle.ToIntPtr(handle);
     }
     
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    static IntPtr* AssignString(IntPtr* other, IntPtr* self) {
-        *other = *self;
-        return other;
+    static IntPtr* AssignString(IntPtr* source, IntPtr* from) {
+        if (GCHandle.FromIntPtr(*source).Target is not string other || GCHandle.FromIntPtr(*from).Target is not string self)
+            return null;
+        Console.WriteLine($"{other} = {self}");
+        return from;
     }
     
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    static void DestructString(IntPtr* thisPointer) {
-        var handle = GCHandle.FromIntPtr(*thisPointer);
+    static void DestructString(void** thisPointer) {
+        var handle = GCHandle.FromIntPtr((IntPtr)(*thisPointer));
         handle.Free();
+    }
+    
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    static void ConstructStringUtf16(char** mem) {
+        var str = (char*)AngelScript.AngelScript.UnmanagedMemory.AllocMem(2);
+        str[0] = '\0';
+        *mem = str;
+    }
+    
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    static void AssignStringUtf16(asScriptGeneric* gen) {
+        char** a = (char**)As.ScriptGeneric_GetArgObject(gen, 0);
+        char** self = (char**)As.ScriptGeneric_GetObject(gen);
+        *self = *a;
+        As.ScriptGeneric_SetReturnAddress(gen, self);
+    }
+    
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    static void DestructStringUtf16(void** thisPointer) {
+        AngelScript.AngelScript.UnmanagedMemory.FreeMem(*thisPointer);
+    }
+
+    class StringFactory : IStringFactory {
+        public void* GetStringConstant(ReadOnlySpan<char> data) {
+            var str = new string(data);
+            var handle = GCHandle.Alloc(str);
+            return (void*)GCHandle.ToIntPtr(handle);
+        }
+
+        public RetCode ReleaseStringConstant(void* str) {
+            if (str is null)
+                return RetCode.InvalidArg;
+            var handle = GCHandle.FromIntPtr((IntPtr)str);
+            handle.Free();
+            return RetCode.Success;
+        }
+
+        public RetCode GetRawStringData(void* str, char* data, uint* length) {
+            if (str is null)
+                return RetCode.InvalidObject;
+
+            var strHandle = GCHandle.FromIntPtr((IntPtr)str);
+            if (strHandle.Target is not string sharpStr)
+                return RetCode.Error;
+            if (length is not null) 
+                *length = (uint)sharpStr.Length;
+
+            if (data is not null) {
+                var span = sharpStr.AsSpan();
+                fixed(char* ptr = span)
+                    Unsafe.CopyBlock(data, ptr, *length*2);
+            }
+
+            return RetCode.Success;
+        }
+    }
+    
+    class StringFactoryUTF16Raw : IStringFactory {
+        public void* GetStringConstant(ReadOnlySpan<char> data) {
+            var str = (char*)AngelScript.AngelScript.UnmanagedMemory.AllocMem((nuint)data.Length*2+2);
+            fixed(char* ptr = data)
+                Unsafe.CopyBlockUnaligned(str, ptr, (uint)data.Length*2);
+            str[data.Length] = '\0';
+            return str;
+        }
+
+        public RetCode ReleaseStringConstant(void* str) {
+            AngelScript.AngelScript.UnmanagedMemory.FreeMem(str);
+            return RetCode.Success;
+        }
+
+        public RetCode GetRawStringData(void* str, char* data, uint* length) {
+            if (str is null)
+                return RetCode.InvalidObject;
+            var stuff = MemoryMarshal.CreateReadOnlySpanFromNullTerminated((char*)str);
+            if (length is not null) 
+                *length = (uint)stuff.Length*2;
+
+            if (data is not null) 
+                Unsafe.CopyBlockUnaligned(data, str, *length);
+
+            return RetCode.Success;
+        }
     }
 
     private static void RegisterStdString(ScriptEngine engine) {
         var strName = "string"u8;
-        var flags = asEObjTypeFlags.asOBJ_REF | asEObjTypeFlags.asOBJ_NOCOUNT;
-    fixed (byte* ptr = strName) {
-            Debug.Assert(As.ScriptEngine_RegisterObjectType(engine, (sbyte*)ptr, Unsafe.SizeOf<string>(), (uint)flags) >= 0);
-            var factory = As.StringFactory_Create(new asSStringFactory {
-                destroyFunc = (IntPtr)(delegate*unmanaged[Cdecl]<void*, asERetCodes>)&StringFactoryDestroy,
-                getRawStringDataFunc = (IntPtr)(delegate*unmanaged[Cdecl]<void*, sbyte*, uint*, void*, asERetCodes>)&StringFactoryGetRawStringData,
-                releaseStringConstantFunc = (IntPtr)(delegate*unmanaged[Cdecl]<void*, void*, asERetCodes>)&StringFactoryReleaseStringConstant,
-                getStringConstantFunc = (IntPtr)(delegate*unmanaged[Cdecl]<byte*, uint, void*, void*>)&StringFactoryGetStringConstant
-            });
-            Debug.Assert(As.ScriptEngine_RegisterStringFactory(engine, (sbyte*)ptr, factory) >= 0);
-            fixed (byte* decl = "string@ f()"u8) {
-                var constructPtr = asSFuncPtr.asFunctionPtr((IntPtr)(delegate* unmanaged[Cdecl] <IntPtr>)&ConstructString);
-                //var destructPtr = asSFuncPtr.asFunctionPtr((IntPtr)(delegate* unmanaged[Cdecl] <IntPtr*, void>)&DestructString);
-                Debug.Assert(As.ScriptEngine_RegisterObjectBehaviour(engine, (sbyte*)ptr, asEBehaviours.asBEHAVE_FACTORY, (sbyte*)decl, &constructPtr, (uint)asECallConvTypes.asCALL_CDECL, null, 0, false)>=0);
+        var flags = ObjectTypeFlags.Value | ObjectTypeFlags.AppClassCA;
+        fixed (byte* ptr = strName) {
+            engine.RegisterObjectType(ptr, Unsafe.SizeOf<IntPtr>(), flags);
+            engine.RegisterStringFactory(ptr, new StringFactoryUTF16Raw());
+            fixed (byte* decl = "void f()"u8) {
+                var constructPtr = asSFuncPtr.FromUnmanagedCallersOnly<Program>(nameof(ConstructStringUtf16));
+                engine.RegisterObjectBehaviour(ptr, Behaviour.Construct, decl, &constructPtr, CallConvTypes.CDeclObjLast);
+                var destructPtr = asSFuncPtr.FromUnmanagedCallersOnly<Program>(nameof(DestructStringUtf16));
+                engine.RegisterObjectBehaviour(ptr, Behaviour.Destruct, decl, &destructPtr, CallConvTypes.CDeclObjLast);
             }
-            fixed (byte* decl = "string& opAssign(string& in)"u8) {
-                var assignPtr = asSFuncPtr.asFunctionPtr((IntPtr)(delegate* unmanaged[Cdecl] <IntPtr*,IntPtr*,IntPtr*>)&AssignString);
-                Debug.Assert(As.ScriptEngine_RegisterObjectMethod(engine, (sbyte*)ptr, (sbyte*)decl, &assignPtr, (uint)asECallConvTypes.asCALL_CDECL_OBJLAST, null, 0, false)>=0);
+            fixed (byte* decl = "string& opAssign(const string &in other)"u8) {
+                var assignPtr = asSFuncPtr.FromUnmanagedCallersOnly<Program>(nameof(AssignStringUtf16));
+                engine.RegisterObjectMethod(ptr, decl, &assignPtr, CallConvTypes.Generic);
             }
             //As.ScriptEngine_RegisterObjectMethod(engine, ptr, "string &opAssign(const string &in)", asMETHODPR(string, operator =, (const string&), string&), asCALL_THISCALL);
         }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void PrintString(void* ptr) {
-        var handle = GCHandle.FromIntPtr((IntPtr)ptr);
-        if (handle.Target is string str)
-            Console.WriteLine(str);
+    private static void PrintString(char* ptr) {
+        Console.WriteLine(MemoryMarshal.CreateReadOnlySpanFromNullTerminated(ptr).ToString());
     }
-    private static void PrintString2(void* ptr) {
-        var handle = GCHandle.FromIntPtr((IntPtr)ptr);
-        if (handle.Target is string str)
-            Console.WriteLine(str);
+    private static void PrintString2(string str) {
+        Console.WriteLine(str);
     }
     
     private static void FloatPrinter(float meow) {
@@ -126,13 +156,15 @@ internal unsafe class Program {
     }
     
     private static void ConfigureEngine(ScriptEngine engine) {
+        engine.SetEngineProperty(EngineProperty.StringEncoding, 1); //CSharp strings use UTF-16
         // Register the script string type
         // Look at the implementation for this function for more information  
         // on how to register a custom string type, and other object types.
-        //RegisterStdString(engine);
-        var printFuncPtr = asSFuncPtr.asFunctionPtr((IntPtr)(delegate* unmanaged[Cdecl] <void*, void>)&PrintString);
-        //engine.RegisterGlobalFunction("void Print(string@)", PrintString2);
-        engine.RegisterGlobalFunction("void FloatPrinter(float meow)", FloatPrinter);
+        RegisterStdString(engine);
+        var printFuncPtr = asSFuncPtr.FromUnmanagedCallersOnly<Program>(nameof(PrintString));
+        fixed (byte* decl = "void print(string &in)\0"u8)
+            engine.RegisterGlobalFunction(decl, &printFuncPtr, asECallConvTypes.asCALL_CDECL, null);
+        engine.RegisterGlobalFunction(FloatPrinter);
 
         // It is possible to register the functions, properties, and types in 
         // configuration groups as well. When compiling the scripts it then
@@ -174,9 +206,12 @@ internal unsafe class Program {
 	}
     
     public static void Main(string[] args) {
-        var engine = AngelScript.AngelScript.CreateScriptEngine(23900);
-        var ptr = asSFuncPtr.asFunctionPtr((IntPtr)(delegate* unmanaged[Cdecl] <asSMessageInfo*, void*, void>)&MessageCallback);
-        engine.SetMessageCallback(&ptr, null, (uint)asECallConvTypes.asCALL_CDECL);
+        NativeLibrary.SetDllImportResolver(Assembly.GetAssembly(typeof(AngelScript.Interop.As)),
+            (name, assembly, path) => {
+                return NativeLibrary.Load(Path.Join(Directory.GetCurrentDirectory(), "runtimes/linux-x64/native/lib" + name + ".so"));
+            });
+        var engine = AngelScript.AngelScript.CreateScriptEngine();
+        engine.SetMessageCallback(MessageCallback);
         ConfigureEngine(engine);
         CompileScript(engine);
         var ctx = engine.CreateContext();
